@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="my">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ARC Stake | Earn USDC</title>
+    <!-- Tailwind CSS for Styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Ethers.js for Blockchain Interaction -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.7.0/ethers.umd.min.js"></script>
+    <style>
+        body {
+            background: linear-gradient(135deg, #050511 0%, #0a0a2e 100%);
+            color: #ffffff;
+            font-family: 'Inter', sans-serif;
+        }
+        .glass-panel {
+            background: rgba(16, 16, 30, 0.8);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(0, 255, 128, 0.1);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+        .neon-text {
+            color: #00ff88;
+            text-shadow: 0 0 10px rgba(0, 255, 136, 0.5);
+        }
+        .btn-primary {
+            background: linear-gradient(90deg, #00b862 0%, #00ff88 100%);
+            color: #000;
+            transition: all 0.3s ease;
+        }
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 0 15px rgba(0, 255, 136, 0.6);
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center p-4">
+
+    <!-- Header / Logo -->
+    <div class="absolute top-6 left-6 flex items-center gap-2">
+        <div class="w-8 h-8 bg-green-500 rounded-full animate-pulse shadow-[0_0_15px_#00ff88]"></div>
+        <h1 class="text-2xl font-bold tracking-wider">ARC <span class="neon-text">Stake</span></h1>
+    </div>
+
+    <!-- Main Container -->
+    <div class="glass-panel rounded-2xl p-8 w-full max-w-md relative overflow-hidden">
+        
+        <!-- Decoration Circles -->
+        <div class="absolute -top-10 -right-10 w-32 h-32 bg-blue-600 rounded-full blur-[80px] opacity-20"></div>
+        <div class="absolute -bottom-10 -left-10 w-32 h-32 bg-green-600 rounded-full blur-[80px] opacity-20"></div>
+
+        <h2 class="text-center text-xl mb-6 font-light opacity-80">Staking Pool USDC/USDC</h2>
+
+        <!-- Stats Grid -->
+        <div class="grid grid-cols-2 gap-4 mb-8">
+            <div class="bg-black/40 p-3 rounded-lg text-center border border-white/5">
+                <p class="text-xs text-gray-400 uppercase">Your Staked</p>
+                <p class="text-lg font-bold text-white mt-1" id="stakedBalance">0.00</p>
+                <span class="text-xs text-blue-400">USDC</span>
+            </div>
+            <div class="bg-black/40 p-3 rounded-lg text-center border border-white/5">
+                <p class="text-xs text-gray-400 uppercase">Rewards</p>
+                <p class="text-lg font-bold neon-text mt-1" id="earnedRewards">0.00</p>
+                <span class="text-xs text-green-400">USDC</span>
+            </div>
+        </div>
+
+        <!-- Action Area -->
+        <div class="space-y-4">
+            <!-- Connect Wallet First -->
+            <button id="connectBtn" class="w-full btn-primary font-bold py-3 rounded-xl uppercase tracking-widest text-sm shadow-lg">
+                Connect Wallet
+            </button>
+
+            <!-- Controls (Hidden until connected) -->
+            <div id="controls" class="hidden space-y-4">
+                
+                <!-- Stake Input -->
+                <div class="relative group">
+                    <input type="number" id="stakeAmount" placeholder="0.0" class="w-full bg-black/50 border border-gray-700 text-white rounded-xl p-4 pr-16 focus:outline-none focus:border-green-500 transition-colors">
+                    <span class="absolute right-4 top-4 text-gray-400 font-bold text-sm">USDC</span>
+                </div>
+                
+                <div class="grid grid-cols-2 gap-3">
+                    <button onclick="approveAndStake()" class="bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-all shadow-lg shadow-blue-900/50">
+                        STAKE 📥
+                    </button>
+                    <button onclick="unstake()" class="bg-gray-700 hover:bg-gray-600 text-white font-bold py-3 rounded-xl transition-all border border-gray-600">
+                        UNSTAKE 📤
+                    </button>
+                </div>
+
+                <p id="statusMsg" class="text-center text-xs text-gray-400 mt-2 h-4 animate-pulse"></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Javascript Logic -->
+    <script>
+        // CONFIGURATION
+        const STAKING_CONTRACT_ADDRESS = "0x925faBFf046718aD29Eb8318769b320359a9d5e4";
+        const TOKEN_CONTRACT_ADDRESS = "0x3600000000000000000000000000000000000000"; // USDC Address
+        const CHAIN_ID_DECIMAL = 5042002; 
+        const CHAIN_ID_HEX = "0x" + CHAIN_ID_DECIMAL.toString(16);
+
+        // ABIs
+        const STAKING_ABI = [
+            "function stake(uint256 _amount) external",
+            "function unstake(uint256 _amount) external",
+            "function pendingReward(address _user) public view returns (uint256)",
+            "function balances(address) public view returns (uint256)"
+        ];
+        const ERC20_ABI = [
+            "function approve(address spender, uint256 amount) external returns (bool)",
+            "function allowance(address owner, address spender) external view returns (uint256)",
+            "function decimals() external view returns (uint8)"
+        ];
+
+        let provider, signer, stakingContract, tokenContract;
+        let userAddress;
+
+        const connectBtn = document.getElementById("connectBtn");
+        const controls = document.getElementById("controls");
+        const statusMsg = document.getElementById("statusMsg");
+
+        async function connectWallet() {
+            if (!window.ethereum) {
+                alert("Please install MetaMask!");
+                return;
+            }
+
+            try {
+                provider = new ethers.BrowserProvider(window.ethereum);
+                
+                // Request Account
+                const accounts = await provider.send("eth_requestAccounts", []);
+                userAddress = accounts[0];
+
+                // Check Network
+                const network = await provider.getNetwork();
+                if (Number(network.chainId) !== CHAIN_ID_DECIMAL) {
+                    try {
+                        await window.ethereum.request({
+                            method: 'wallet_switchEthereumChain',
+                            params: [{ chainId: CHAIN_ID_HEX }],
+                        });
+                    } catch (switchError) {
+                        statusMsg.innerText = "Please verify you have ARC Testnet added in MetaMask!";
+                        statusMsg.style.color = "red";
+                        return;
+                    }
+                }
+
+                // Setup Contracts
+                signer = await provider.getSigner();
+                stakingContract = new ethers.Contract(STAKING_CONTRACT_ADDRESS, STAKING_ABI, signer);
+                tokenContract = new ethers.Contract(TOKEN_CONTRACT_ADDRESS, ERC20_ABI, signer);
+
+                // Update UI
+                connectBtn.classList.add("hidden");
+                controls.classList.remove("hidden");
+                statusMsg.innerText = "Connected: " + userAddress.slice(0,6) + "..." + userAddress.slice(-4);
+                
+                refreshData();
+                setInterval(refreshData, 5000); // Auto refresh every 5s
+
+            } catch (error) {
+                console.error(error);
+                statusMsg.innerText = "Connection Failed";
+            }
+        }
+
+        async function refreshData() {
+            if(!stakingContract) return;
+            try {
+                // Fetch Staked Amount
+                const stakedRaw = await stakingContract.balances(userAddress);
+                document.getElementById("stakedBalance").innerText = ethers.formatUnits(stakedRaw, 18); // Assuming 18 decimals
+
+                // Fetch Rewards
+                const rewardRaw = await stakingContract.pendingReward(userAddress);
+                document.getElementById("earnedRewards").innerText = parseFloat(ethers.formatUnits(rewardRaw, 18)).toFixed(4); // assuming 18 decimals
+            } catch (e) {
+                console.log("Error fetching data", e);
+            }
+        }
+
+        async function approveAndStake() {
+            const amountStr = document.getElementById("stakeAmount").value;
+            if(!amountStr || amountStr <= 0) return alert("Enter amount!");
+
+            statusMsg.innerText = "Processing... Check MetaMask";
+            statusMsg.style.color = "#00ff88";
+
+            try {
+                const amountWei = ethers.parseUnits(amountStr, 18); // Assuming USDC is 18 decimals on this testnet
+
+                // 1. Check Allowance
+                const allowance = await tokenContract.allowance(userAddress, STAKING_CONTRACT_ADDRESS);
+                
+                if (allowance < amountWei) {
+                    statusMsg.innerText = "Step 1/2: Approving Token...";
+                    const txApprove = await tokenContract.approve(STAKING_CONTRACT_ADDRESS, amountWei);
+                    await txApprove.wait();
+                }
+
+                // 2. Stake
+                statusMsg.innerText = "Step 2/2: Staking...";
+                const txStake = await stakingContract.stake(amountWei);
+                await txStake.wait();
+
+                statusMsg.innerText = "✅ Staking Successful!";
+                document.getElementById("stakeAmount").value = "";
+                refreshData();
+            } catch (err) {
+                console.error(err);
+                statusMsg.innerText = "Transaction Failed: " + (err.reason || err.message);
+                statusMsg.style.color = "red";
+            }
+        }
+
+        async function unstake() {
+            const amountStr = document.getElementById("stakeAmount").value;
+            if(!amountStr || amountStr <= 0) return alert("Enter amount to unstake!");
+
+            statusMsg.innerText = "Unstaking... Check MetaMask";
+            try {
+                const amountWei = ethers.parseUnits(amountStr, 18);
+                const tx = await stakingContract.unstake(amountWei);
+                await tx.wait();
+                statusMsg.innerText = "✅ Unstaked Successfully!";
+                refreshData();
+            } catch (err) {
+                console.error(err);
+                statusMsg.innerText = "Failed: " + (err.reason || err.message);
+            }
+        }
+
+        connectBtn.addEventListener("click", connectWallet);
+
+    </script>
+</body>
+</html>
